@@ -1,0 +1,15 @@
+
+# For p12
+server.ssl.key-store-type=PKCS12
+server.ssl.key-store=classpath:keystore/keyStore.p12
+server.ssl.key-store-password=password
+server.ssl.key-alias=1567435781213
+
+server.ssl.trust-store-type=PKCS12
+server.ssl.trust-store=classpath:keystore/trustStore.p12
+server.ssl.trust-store-password=password
+server.ssl.trust-alias=1567435781213
+
+server.ssl.enabled=true
+server.ssl.client-auth=need
+server.port=8444
