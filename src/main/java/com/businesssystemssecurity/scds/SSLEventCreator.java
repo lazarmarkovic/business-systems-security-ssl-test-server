@@ -21,13 +21,13 @@ public class SSLEventCreator {
     private RestTemplate restTemplate;
 
     @Async
-    @Scheduled(fixedDelay = 1000 * 7)
+    @Scheduled(fixedDelay = 1000 * 14)
     public void create() {
         try {
             String responseFromSub = restTemplate.getForObject("https://localhost:8443/api/testSSL/receiveFromThePKIServer", String.class);
             System.out.println("----> Response from sub: " + responseFromSub);
         } catch (Exception e) {
-            //e.printStackTrace();
+            e.printStackTrace();
             System.out.println("Fatal error.");
         }
     }

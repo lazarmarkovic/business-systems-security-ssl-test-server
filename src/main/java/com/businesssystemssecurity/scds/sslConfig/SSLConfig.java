@@ -1,5 +1,6 @@
 package com.businesssystemssecurity.scds.sslConfig;
 
+import com.businesssystemssecurity.scds.GeneralException;
 import org.apache.http.client.HttpClient;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.impl.client.HttpClients;
@@ -11,10 +12,13 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-import javax.net.ssl.SSLContext;
+import javax.net.ssl.*;
 import java.io.File;
 import java.io.FileInputStream;
 import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
 
 @Configuration()
 public class SSLConfig {
@@ -36,7 +40,7 @@ public class SSLConfig {
      * Application keystore password.
      */
     @Value("${server.ssl.key-store-password}")
-    private String keystorePassword;
+    private char[] keystorePassword;
 
     /**
      * Keystore alias for application client credential.
@@ -60,35 +64,122 @@ public class SSLConfig {
      * Application truststore password.
      */
     @Value("${server.ssl.trust-store-password}")
-    private String truststorePassword;
+    private char[] truststorePassword;
+
 
     @Bean
     public RestTemplate restTemplate() {
         return new RestTemplate(new HttpComponentsClientHttpRequestFactory(
-                httpClient(keystoreType, keystore, keystorePassword, applicationKeyAlias,
-                        truststoreType, truststore, truststorePassword)));
+                httpClient(keystore, keystorePassword, truststore, truststorePassword)));
     }
 
-
     @Bean
-    public HttpClient httpClient(String keystoreType, Resource keystore, String keystorePassword, String alias,
-                                 String truststoreType, Resource truststore, String truststorePassword) {
+    public HttpClient httpClient(Resource keystore, char[] keystorePassword,
+                                 Resource truststore, char[] truststorePassword) {
         try {
-            KeyStore keyStore = KeyStore.getInstance(keystoreType);
-            keyStore.load(keystore.getInputStream(), keystorePassword.toCharArray());
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            // Using null here initialises the TMF with the default trust store.
+            tmf.init((KeyStore) null);
 
-            KeyStore trustStore = KeyStore.getInstance(truststoreType);
-            trustStore.load(truststore.getInputStream(), truststorePassword.toCharArray());
+            /* Load trust store */
+            KeyStore trustStore = KeyStore.getInstance(this.truststoreType);
+            trustStore.load(truststore.getInputStream(), this.truststorePassword);
 
-            SSLContext sslcontext = SSLContexts.custom().loadTrustMaterial(trustStore, null)
-                    .loadKeyMaterial(keyStore, keystorePassword.toCharArray(), (aliases, socket) -> alias)
-                    .build();
 
-            SSLConnectionSocketFactory sslFactory = new SSLConnectionSocketFactory(sslcontext,
-                    new String[]{"TLSv1.2"},
+            tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+
+            // Get hold of the default trust manager
+            X509TrustManager x509TrustManager = null;
+            for (TrustManager tm : tmf.getTrustManagers()) {
+                if (tm instanceof X509TrustManager) {
+                    x509TrustManager = (X509TrustManager) tm;
+                    break;
+                }
+            }
+
+
+            final X509TrustManager finalMyTm = x509TrustManager;
+            X509TrustManager customTm = new X509TrustManager() {
+                @Override
+                public X509Certificate[] getAcceptedIssuers() {
+                    if (finalMyTm != null) {
+                        return finalMyTm.getAcceptedIssuers();
+                    } else {
+                        throw new GeneralException("Error. No trusted certificates.");
+                    }
+                }
+
+                @Override
+                public void checkServerTrusted(X509Certificate[] chain,
+                                               String authType) throws CertificateException {
+
+                    System.out.println("Checking server certificate trust.");
+
+                    try {
+                        if (finalMyTm != null) {
+                            finalMyTm.checkServerTrusted(chain, authType);
+                        } else {
+                            throw new GeneralException("Error. No trusted certificates.");
+                        }
+                    } catch (CertificateException e) {
+                        throw new CertificateException();
+                    }
+
+                    System.out.println("Done.");
+                    System.out.println("Checking server certificate validity (OCSP).");
+
+                    for (int i=0; i<chain.length; i++) {
+                        System.out.println("CERT: " + chain[i].getSubjectDN().toString());
+                    }
+
+                }
+
+                @Override
+                public void checkClientTrusted(X509Certificate[] chain,
+                                               String authType) throws CertificateException {
+                    // If you're planning to use client-cert auth,
+                    // do the same as checking the server.
+
+                    System.out.println("Checking client certificate trust.");
+                    try {
+                        if (finalMyTm != null) {
+                            finalMyTm.checkClientTrusted(chain, authType);
+                        } else {
+                            throw new CertificateException();
+                        }
+                    } catch (CertificateException e) {
+                        throw new CertificateException();
+                    }
+
+                    System.out.println("Done.");
+                    System.out.println("Checking server certificate validity (OCSP).");
+
+                    for (int i=0; i<chain.length; i++) {
+                        System.out.println("CERT: " + chain[i].getSubjectDN().toString());
+                    }
+                }
+            };
+
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            KeyStore keyStore = KeyStore.getInstance(this.keystoreType);
+            keyStore.load(this.keystore.getInputStream(), this.keystorePassword);
+            kmf.init(keyStore, this.keystorePassword);
+
+
+//            SSLContext sslContext = SSLContexts.custom().loadTrustMaterial(trustStore, null)
+//                    .loadKeyMaterial(keyStore, keystorePassword.toCharArray(), (aliases, socket) -> alias)
+//                    .build();
+
+
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(kmf.getKeyManagers(), new TrustManager[] { customTm }, new SecureRandom());
+            SSLConnectionSocketFactory sslFactory = new SSLConnectionSocketFactory(sslContext, new String[]{"TLSv1.2"},
                     null, SSLConnectionSocketFactory.getDefaultHostnameVerifier());
 
-            return HttpClients.custom().setSSLSocketFactory(sslFactory).build();
+            return HttpClients.custom()
+                    .setSSLSocketFactory(sslFactory)
+                    .build();
         } catch (Exception e) {
             throw new IllegalStateException("Error while configuring SSL rest template", e);
         }
